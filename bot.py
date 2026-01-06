@@ -1,55 +1,58 @@
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
+from telegram.constants import ChatMemberStatus
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import time
 
-# تنظیمات اولیه
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID")) # آیدی عددی شما
-is_active = True
-user_last_msg_time = {} # برای جلوگیری از اسپم
+# --- بخش وب‌سرور برای زنده نگه داشتن در Render ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Alive!")
 
-# لیست سلام‌ها به زبان‌های مختلف
-GREETINGS = ["سلام", "hello", "hi", "hola", "bonjour", "salaam", "درود"]
+def run_health_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+# --- تنظیمات ربات تلگرام ---
+TOKEN = os.getenv("BOT_TOKEN")
+is_active = True
+user_last_msg_time = {}
+GREETINGS = ["سلام", "hello", "hi", "درود", "چطوری", "hey"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ربات مدیریت سلام فعال شد!")
+    await update.message.reply_text("ربات فعال شد! ادمین‌ها با /toggle کنترل می‌کنند.")
 
 async def toggle_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_active
-    if update.effective_user.id == ADMIN_ID:
+    user_status = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+    if user_status.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
         is_active = not is_active
-        status = "روشن" if is_active else "خاموش"
-        await update.message.reply_text(f"وضعیت ربات: {status}")
+        status = "✅ روشن" if is_active else "❌ خاموش"
+        await update.message.reply_text(f"وضعیت: {status}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global is_active
-    if not is_active or not update.message.text:
-        return
-
-    user_id = update.effective_user.id
-    current_time = time.time()
+    if not is_active or not update.message.text: return
     text = update.message.text.lower()
-
-    # سیستم ضد اسپم (هر کاربر هر ۱۰ ثانیه فقط یک جواب می‌گیرد)
-    if user_id in user_last_msg_time:
-        if current_time - user_last_msg_time[user_id] < 10:
-            return
-
-    # بررسی وجود سلام در پیام
     if any(greet in text for greet in GREETINGS):
-        user_last_msg_time[user_id] = current_time
-        await update.message.reply_text(f"سلام {update.effective_user.first_name} عزیز! خوش آمدی.")
+        await update.message.reply_text(f"سلام {update.effective_user.first_name} عزیز!")
 
 def main():
+    # روشن کردن وب‌سرور در یک رشته (Thread) جداگانه
+    threading.Thread(target=run_health_server, daemon=True).start()
+    
+    # اجرای ربات
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("toggle", toggle_bot))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("Bot is running...")
+    print("Bot and Health Server are running...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
